@@ -77,25 +77,39 @@ def test_litellm_judge_passes_max_tokens_as_int(monkeypatch, max_tokens):
     Sending a sequence makes any spec-compliant OpenAI-compatible server reject the
     request with a 400, after which the judge returns its error string and that string
     gets scored as a real judgment.
+
+    The parametrization over two values guards against a fix that hard-codes a
+    single value instead of passing through whatever the caller set.
     """
+    # Inject the stub before the judge is called. __call_litellm does
+    # `import litellm` at call time, so sys.modules patching is enough;
+    # no real litellm install is needed and the test will not be skipped in CI.
     captured = {}
     monkeypatch.setitem(sys.modules, "litellm", _build_fake_litellm(captured))
 
     judge = _make_judge(max_tokens=max_tokens)
+    # evaluate_answer_batch is the public entry point; calling it also exercises
+    # the "the judge returned a real judgment and not an error string" path,
+    # since responses == ["judgment"] would be ["ERROR: ..."] if the call failed.
     _, _, responses = judge.evaluate_answer_batch(
         questions=["Why is 2 + 2 = 4?"], answers=["4"], options=[None], golds=["4"]
     )
 
     assert captured["max_tokens"] == max_tokens
-    # isinstance guards the intent explicitly: a 1-tuple (max_tokens,) also equals
-    # max_tokens numerically only via identity, but the type check catches regressions
-    # where the trailing comma comes back.
+    # isinstance documents the intent: a 1-tuple (max_tokens,) compares unequal
+    # to max_tokens, so == alone would already catch the regression, but the
+    # type check makes the failure message immediately obvious if it regresses.
     assert isinstance(captured["max_tokens"], int)
     assert responses == ["judgment"]
 
 
 def test_litellm_judge_omits_max_tokens_when_unset(monkeypatch):
-    """No `max_tokens` on the judge means no `max_tokens` key in the litellm call."""
+    """No `max_tokens` on the judge means no `max_tokens` key in the litellm call.
+
+    Guards against the obvious wrong fix of always sending max_tokens=None,
+    which some providers reject or handle differently from omitting the key.
+    """
+    # Same stub approach as the parametrized test above.
     captured = {}
     monkeypatch.setitem(sys.modules, "litellm", _build_fake_litellm(captured))
 
